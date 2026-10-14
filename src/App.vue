@@ -49,6 +49,7 @@ const delaySeconds = ref("0");
 const reloginBeforeSeconds = ref("10");
 const reauthRequired = ref(false);
 const running = ref(false);
+const stopping = ref(false);
 const logs = ref<BookingLog[]>([]);
 let unlisten: UnlistenFn | undefined;
 let unlistenReauth: UnlistenFn | undefined;
@@ -85,9 +86,20 @@ function localDateTime(v: unknown) {
   if (Number.isNaN(parsed.getTime())) return "";
   return new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 }
-function addLog(message: string, level = "info") {
-  logs.value.unshift({ message, level, at: new Date().toLocaleTimeString("zh-CN", { hour12: false }) });
-  logs.value = logs.value.slice(0, 40);
+function addLog(entry: BookingLog) {
+  logs.value.unshift(entry);
+}
+async function clearLogs() {
+  try {
+    await invoke("clear_booking_logs");
+    logs.value = [];
+  } catch (reason) {
+    error.value = String(reason);
+  }
+}
+async function openBookingLog() {
+  try { await invoke("open_booking_log"); }
+  catch (reason) { error.value = String(reason); }
 }
 async function loadData() {
   loading.value = true;
@@ -179,7 +191,6 @@ async function reserveOnce() {
     const result = await invoke<BookingReply>("reserve_lecture", {
       lectureWid: selectedWid.value, captchaCode: captchaCode.value.trim(),
     });
-    addLog(result.message + (result.verified ? " · 已在预约列表确认" : ""), result.success ? "success" : "warning");
     notice.value = result.message;
     if (result.success) { captcha.value = null; await loadData(); }
     else await refreshCaptcha();
@@ -193,28 +204,53 @@ async function startBooking(at: number) {
   if (!Number.isFinite(delay) || delay < -60 || delay > 60) { error.value = "微调秒数需在 -60 到 60 之间"; return; }
   if (!Number.isFinite(reloginBefore) || reloginBefore < 0 || reloginBefore > 300) { error.value = "提前登录时间需在 0 到 300 秒之间"; return; }
   error.value = "";
+  running.value = true;
+  stopping.value = false;
   try {
     await invoke("start_booking", { lectureWid: selectedWid.value, startAtMs: at, delaySeconds: delay, reloginBeforeSeconds: reloginBefore });
-    running.value = true;
-    addLog(at > Date.now() ? "已安排定时预约" : "自动预约已启动");
-  } catch (reason) { error.value = String(reason); }
+  } catch (reason) {
+    running.value = false;
+    stopping.value = false;
+    error.value = String(reason);
+  }
 }
 async function stopBooking() {
-  try { await invoke("stop_booking"); } catch (reason) { error.value = String(reason); }
-  running.value = false;
-  reauthRequired.value = false;
+  if (stopping.value) return;
+  stopping.value = true;
+  try {
+    const stopped = await invoke<boolean>("stop_booking");
+    if (!stopped) {
+      running.value = false;
+      stopping.value = false;
+      reauthRequired.value = false;
+    }
+  } catch (reason) {
+    error.value = String(reason);
+    stopping.value = false;
+  }
 }
 onMounted(async () => {
   try {
     unlisten = await listen<BookingLog>("booking-log", ({ payload }) => {
-      addLog(payload.message, payload.level);
-      if (payload.level === "stopped") reauthRequired.value = false;
+      addLog(payload);
       if (["stopped", "success", "error"].includes(payload.level)) {
+        reauthRequired.value = false;
         running.value = false;
+        stopping.value = false;
         if (payload.level === "success") void loadData();
       }
     });
   } catch { /* The event bridge is available inside the Tauri desktop shell. */ }
+  try {
+    const saved = await invoke<BookingLog[]>("load_booking_logs");
+    const currentKeys = new Set(logs.value.map((log) => `${log.at}\0${log.level}\0${log.message}`));
+    logs.value = [
+      ...logs.value,
+      ...saved.filter((log) => !currentKeys.has(`${log.at}\0${log.level}\0${log.message}`)),
+    ];
+  } catch (reason) {
+    error.value = String(reason);
+  }
   try {
     unlistenReauth = await listen<{ message: string }>("reauth-required", ({ payload }) => {
       reauthRequired.value = true;
@@ -346,14 +382,15 @@ onUnmounted(() => {
           </div>
 
           <div class="rounded-2xl bg-white p-5 shadow-soft">
-            <div class="flex items-center justify-between"><div><h2 class="font-bold">定时自动重试</h2><p class="mt-1 text-xs text-muted">自动识别新验证码并重试</p></div><span v-if="running" class="rounded-full bg-green-50 px-3 py-2 text-xs font-semibold text-green-700">运行中</span></div>
+            <div class="flex items-center justify-between"><div><h2 class="font-bold">定时自动重试</h2><p class="mt-1 text-xs text-muted">自动识别新验证码并重试</p></div><span v-if="running" class="rounded-full bg-green-50 px-3 py-2 text-xs font-semibold text-green-700">{{ stopping ? "正在停止" : "运行中" }}</span></div>
             <label class="mt-4 block text-xs font-semibold text-muted">预约开放时间</label><input v-model="scheduledAt" class="field mt-2" type="datetime-local" />
             <div class="mt-3 grid grid-cols-2 gap-3"><label class="block text-xs font-semibold text-muted">提前登录（秒）<input v-model="reloginBeforeSeconds" class="field mt-2" type="number" min="0" max="300" step="0.5" /></label><label class="block text-xs font-semibold text-muted">微调秒数（负数可提前）<input v-model="delaySeconds" class="field mt-2" type="number" min="-60" max="60" step="0.1" /></label></div>
-            <button class="soft-button mt-3 w-full" :disabled="!selectedWid || running" @click="startBooking(scheduledAt ? new Date(scheduledAt).getTime() : Date.now())">按设定时间开始</button>
+            <button v-if="running" class="soft-button mt-3 w-full text-red-600" :disabled="stopping" @click="stopBooking">{{ stopping ? "正在停止自动重试…" : "停止自动重试" }}</button>
+            <button v-else class="soft-button mt-3 w-full" :disabled="!selectedWid" @click="startBooking(scheduledAt ? new Date(scheduledAt).getTime() : Date.now())">按设定时间开始</button>
           </div>
 
           <div class="rounded-2xl bg-white shadow-soft">
-            <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4"><div><h2 class="font-bold">运行记录</h2><p class="mt-1 text-xs text-muted">预约状态和服务响应</p></div><button class="text-xs font-semibold text-muted" @click="logs = []">清空</button></div>
+            <div class="flex items-center justify-between border-b border-gray-100 px-5 py-4"><div><h2 class="font-bold">运行记录</h2><p class="mt-1 text-xs text-muted">完整记录保存在本机</p></div><div class="flex gap-3"><button class="text-xs font-semibold text-brand" @click="openBookingLog">打开本地日志</button><button class="text-xs font-semibold text-muted" @click="clearLogs">清空</button></div></div>
             <div class="max-h-48 overflow-auto px-5 py-2"><div v-if="!logs.length" class="py-5 text-center text-xs text-muted">预约日志会显示在这里</div><div v-for="(log, index) in logs" :key="index" class="flex gap-3 border-b border-gray-50 py-2.5 text-xs"><span class="shrink-0 font-mono text-muted">{{ log.at }}</span><span :class="log.level === 'success' ? 'text-green-700' : log.level === 'error' ? 'text-red-600' : 'text-muted'">{{ log.message }}</span></div></div>
           </div>
         </aside>

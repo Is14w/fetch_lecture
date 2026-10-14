@@ -5,16 +5,21 @@ use crate::{
     ocr::OcrEngine,
 };
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use chrono::Local;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Write},
     path::PathBuf,
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex as StdMutex,
     },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
 
@@ -73,9 +78,130 @@ impl AppState {
     }
 }
 
+#[derive(Clone, Deserialize, Serialize)]
+pub struct BookingLogEntry {
+    pub at: String,
+    pub level: String,
+    pub message: String,
+}
+
+static BOOKING_LOG_LOCK: StdMutex<()> = StdMutex::new(());
+
+fn booking_log_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_log_dir()
+        .map_err(|error| format!("获取本地日志目录失败：{error}"))?;
+    fs::create_dir_all(&directory).map_err(|error| format!("创建本地日志目录失败：{error}"))?;
+    Ok(directory.join("booking.log"))
+}
+
+fn persist_log(app: &AppHandle, entry: &BookingLogEntry) -> Result<(), String> {
+    let _guard = BOOKING_LOG_LOCK
+        .lock()
+        .map_err(|error| format!("锁定本地日志失败：{error}"))?;
+    let path = booking_log_path(app)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|error| format!("打开本地日志失败：{error}"))?;
+    let message = entry.message.replace('\r', " ").replace('\n', " ");
+    let line = format!(
+        "[{}] [{}] {}\n",
+        entry.at,
+        entry.level.to_uppercase(),
+        message
+    );
+    file.write_all(line.as_bytes())
+        .map_err(|error| format!("写入本地日志失败：{error}"))
+}
+
 fn emit_log(app: &AppHandle, level: &str, message: impl Into<String>) {
-    let message: String = message.into();
-    let _ = app.emit("booking-log", json!({ "level": level, "message": message }));
+    let mut entry = BookingLogEntry {
+        at: Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string(),
+        level: level.to_string(),
+        message: message.into(),
+    };
+    if let Err(error) = persist_log(app, &entry) {
+        entry.level = "error".to_string();
+        entry.message = format!("{}（本地日志写入失败：{error}）", entry.message);
+    }
+    let _ = app.emit("booking-log", entry);
+}
+
+#[tauri::command]
+pub fn load_booking_logs(app: AppHandle) -> Result<Vec<BookingLogEntry>, String> {
+    let _guard = BOOKING_LOG_LOCK
+        .lock()
+        .map_err(|error| format!("锁定本地日志失败：{error}"))?;
+    let path = booking_log_path(&app)?;
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = std::fs::File::open(path).map_err(|error| format!("读取本地日志失败：{error}"))?;
+    let mut entries = Vec::new();
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Some(rest) = line.strip_prefix('[') else {
+            continue;
+        };
+        let Some((at, rest)) = rest.split_once("] [") else {
+            continue;
+        };
+        let Some((level, message)) = rest.split_once("] ") else {
+            continue;
+        };
+        entries.push(BookingLogEntry {
+            at: at.to_string(),
+            level: level.to_lowercase(),
+            message: message.to_string(),
+        });
+    }
+    entries.reverse();
+    Ok(entries)
+}
+
+#[tauri::command]
+pub fn clear_booking_logs(app: AppHandle) -> Result<(), String> {
+    let _guard = BOOKING_LOG_LOCK
+        .lock()
+        .map_err(|error| format!("锁定本地日志失败：{error}"))?;
+    let path = booking_log_path(&app)?;
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+        .map(|_| ())
+        .map_err(|error| format!("清空本地日志失败：{error}"))
+}
+
+#[tauri::command]
+pub fn open_booking_log(app: AppHandle) -> Result<(), String> {
+    let path = {
+        let _guard = BOOKING_LOG_LOCK
+            .lock()
+            .map_err(|error| format!("锁定本地日志失败：{error}"))?;
+        let path = booking_log_path(&app)?;
+        OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+            .map_err(|error| format!("打开本地日志失败：{error}"))?;
+        path
+    };
+
+    #[cfg(target_os = "windows")]
+    let result = Command::new("notepad.exe").arg(path).spawn();
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg("-t").arg(path).spawn();
+    #[cfg(target_os = "linux")]
+    let result = Command::new("xdg-open").arg(path).spawn();
+
+    result
+        .map(|_| ())
+        .map_err(|error| format!("启动文本编辑器失败：{error}"))
 }
 
 async fn wait_until_or_cancel(cancel: &CancellationToken, target_ms: i64) -> bool {
@@ -279,7 +405,7 @@ async fn run_booking(
             Ok(reply) => {
                 emit_log(
                     &app,
-                    if reply.success { "success" } else { "warning" },
+                    if reply.verified { "success" } else { "warning" },
                     format!("第 {attempt} 次：{}", reply.message),
                 );
 
@@ -302,6 +428,7 @@ async fn run_booking(
                 }
 
                 if reply.message.contains("预约已结束") {
+                    emit_log(&app, "stopped", "讲座预约已结束，自动重试停止");
                     break;
                 }
                 if reply.message.contains("名额已满") || reply.message.contains("预约人数已满")
@@ -451,15 +578,43 @@ pub async fn get_captcha(state: State<'_, AppState>) -> Result<CaptchaReply, Str
 
 #[tauri::command]
 pub async fn reserve_lecture(
+    app: AppHandle,
     state: State<'_, AppState>,
     lecture_wid: String,
     captcha_code: String,
 ) -> Result<BookingReply, String> {
     if lecture_wid.trim().is_empty() || captcha_code.trim().is_empty() {
-        return Err("讲座编号和验证码不能为空".to_string());
+        let error = "讲座编号和验证码不能为空".to_string();
+        emit_log(&app, "error", format!("单次预约失败：{error}"));
+        return Err(error);
     }
-    let session = state.current_session().await?;
-    submit_with_code(&session, &lecture_wid, captcha_code.trim(), true).await
+    let session = match state.current_session().await {
+        Ok(session) => session,
+        Err(error) => {
+            emit_log(&app, "error", format!("单次预约失败：{error}"));
+            return Err(error);
+        }
+    };
+    let result = submit_with_code(&session, &lecture_wid, captcha_code.trim(), true).await;
+    match &result {
+        Ok(reply) => emit_log(
+            &app,
+            if reply.verified { "success" } else { "warning" },
+            format!(
+                "单次预约：{}{}",
+                reply.message,
+                if reply.verified {
+                    " · 已在预约列表确认"
+                } else if reply.success {
+                    " · 暂未在预约列表确认"
+                } else {
+                    ""
+                }
+            ),
+        ),
+        Err(error) => emit_log(&app, "error", format!("单次预约失败：{error}")),
+    }
+    result
 }
 
 #[tauri::command]
@@ -492,11 +647,25 @@ pub async fn start_booking(
         *current = Some(cancel.clone());
     }
 
-    let app = app.clone();
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or_default();
+    emit_log(
+        &app,
+        "info",
+        if target_ms > now_ms {
+            "已安排定时预约"
+        } else {
+            "自动预约已启动"
+        },
+    );
+
+    let booking_app = app.clone();
     let state = state.inner().clone();
     tokio::spawn(async move {
         run_booking(
-            app,
+            booking_app,
             state,
             cancel,
             lecture_wid,
@@ -509,11 +678,15 @@ pub async fn start_booking(
 }
 
 #[tauri::command]
-pub async fn stop_booking(state: State<'_, AppState>) -> Result<(), String> {
-    if let Some(token) = state.booking_cancel.lock().await.as_ref() {
+pub async fn stop_booking(app: AppHandle, state: State<'_, AppState>) -> Result<bool, String> {
+    let token = state.booking_cancel.lock().await.clone();
+    if let Some(token) = token {
+        emit_log(&app, "info", "正在停止自动预约");
         token.cancel();
+        Ok(true)
+    } else {
+        Ok(false)
     }
-    Ok(())
 }
 
 #[tauri::command]

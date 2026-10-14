@@ -48,6 +48,9 @@ fn main() {
             commands::reserve_lecture,
             commands::start_booking,
             commands::stop_booking,
+            commands::load_booking_logs,
+            commands::clear_booking_logs,
+            commands::open_booking_log,
             commands::logout
         ])
         .run(tauri::generate_context!())
