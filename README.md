@@ -30,10 +30,6 @@ npm run tauri dev
 npm run tauri build
 ```
 
-## 自动发布
-
-向 GitHub 推送 `v*` 版本标签后，`.github/workflows/release.yml` 会构建并发布 Windows x64、macOS arm64 和 Linux x64 安装包。macOS 构建使用 ad-hoc 签名；首次打开时，系统可能要求在“隐私与安全性”中批准应用。
-
 ## OCR 资源与许可
 
 OCR 模型和字符集来自 [ddddocr](https://github.com/sml2h3/ddddocr)，遵循 MIT 许可。ONNX Runtime 由 Microsoft 提供，遵循 MIT 许可。对应许可证、来源说明和第三方声明随应用资源保留。运行库覆盖 Windows x64、macOS arm64 和 Linux x64。
