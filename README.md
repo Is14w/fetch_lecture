@@ -6,8 +6,28 @@
 
 ---
 
+## Tauri 桌面版（新实现）
+
+仓库新增了跨平台桌面端：Tauri 2 + Rust + Vue 3 + Tailwind CSS 2.2。原 Python CLI、PyQt GUI 和油猴脚本暂时保留，作为旧版与接口行为的参照。
+
+启动开发版：
+
+    npm install
+    npm run tauri dev
+
+构建桌面安装包：
+
+    npm run tauri build
+
+新桌面端迁移了统一身份认证、短信二次验证、讲座列表、已预约列表、手动/定时自动预约与运行日志。验证码图片由 Rust 下载，并使用随应用打包的 ONNX 模型在本机识别；应用随包提供适配目标平台的 ONNX Runtime 动态库，不需要另装运行库或启动 ddddocr Python API。当前运行库资源覆盖 Windows x64、macOS arm64 和 Linux x64。密码只在当前进程内用于认证，不写入账号文件；随机设备标识保存在本机 WebView 存储，用于复用学校的可信设备记录。
+
+ONNX 模型和字符集来自 [ddddocr](https://github.com/sml2h3/ddddocr)，遵循其 MIT 许可；许可证与来源说明随资源一起保留。ONNX Runtime 由 Microsoft 提供，MIT 许可证文本也随资源打包。默认模型的预处理和 CTC 解码行为可在 [ddddocr OCR 引擎](https://github.com/sml2h3/ddddocr/blob/master/ddddocr/core/ocr_engine.py)中查看。
+
+> 许可证待核对：仓库根目录声明 MIT，但旧版 seu_auth.py 文件头声明 GPL-3.0。新增 Tauri 后端按协议重新实现；发布旧版 Python 文件或合并分发前，应先由维护者确认许可证范围。
+
 ## 目录
 
+- [Tauri 桌面版（新实现）](#tauri-桌面版新实现)
 - [使用环境说明](#使用环境说明)
 - [功能特性](#功能特性)
 - [方式一：GUI 图形界面（推荐）](#方式一gui-图形界面推荐)

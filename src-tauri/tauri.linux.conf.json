@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/ocr/runtime/linux-x64/libonnxruntime.so": "runtime/libonnxruntime.so",
+      "resources/ocr/runtime/linux-x64/libonnxruntime_providers_shared.so": "runtime/libonnxruntime_providers_shared.so"
+    }
+  }
+}

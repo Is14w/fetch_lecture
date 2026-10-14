@@ -1,0 +1,7 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/ocr/runtime/macos-arm64/libonnxruntime.dylib": "runtime/libonnxruntime.dylib"
+    }
+  }
+}

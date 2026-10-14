@@ -1,0 +1,49 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Fetch Lecture",
+  "version": "4.0.0",
+  "identifier": "edu.seu.fetchlecture",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Fetch Lecture · 东南大学讲座预约",
+        "width": 1320,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 700,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "category": "Education",
+    "shortDescription": "东南大学研究生素质讲座预约工具",
+    "resources": {
+      "resources/ocr/common_old.onnx": "ocr/common_old.onnx",
+      "resources/ocr/charset_old.json": "ocr/charset_old.json",
+      "resources/ocr/LICENSE.ddddocr": "ocr/LICENSE.ddddocr",
+      "resources/ocr/README.txt": "ocr/README.txt",
+      "resources/ocr/LICENSE.onnxruntime": "ocr/LICENSE.onnxruntime",
+      "resources/ocr/runtime/ThirdPartyNotices.txt": "runtime/ThirdPartyNotices.txt",
+      "resources/ocr/runtime/VERSION_NUMBER": "runtime/VERSION_NUMBER"
+    },
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  }
+}

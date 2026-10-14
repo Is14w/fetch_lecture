@@ -1,0 +1,8 @@
+{
+  "bundle": {
+    "resources": {
+      "resources/ocr/runtime/windows/onnxruntime.dll": "runtime/onnxruntime.dll",
+      "resources/ocr/runtime/windows/onnxruntime_providers_shared.dll": "runtime/onnxruntime_providers_shared.dll"
+    }
+  }
+}

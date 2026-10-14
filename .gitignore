@@ -30,3 +30,8 @@ logs/
 
 # macOS
 .DS_Store
+
+# Tauri and Vue
+node_modules/
+src-tauri/target/
+src-tauri/gen/
