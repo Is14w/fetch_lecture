@@ -36,4 +36,4 @@ npm run tauri build
 
 OCR 模型和字符集来自 [ddddocr](https://github.com/sml2h3/ddddocr)，遵循 MIT 许可。ONNX Runtime 由 Microsoft 提供，遵循 MIT 许可。对应许可证、来源说明和第三方声明随应用资源保留。运行库覆盖 Windows x64、macOS arm64 和 Linux x64。
 
-应用源码遵循仓库根目录的 MIT License。`images/` 保留原仓库的参考截图，不参与桌面应用构建。
+应用源码遵循仓库根目录的 MIT License。
