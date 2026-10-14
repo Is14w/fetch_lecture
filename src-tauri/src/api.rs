@@ -1,4 +1,4 @@
-use crate::auth::CampusSession;
+use crate::auth::{self, CampusSession};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,6 +38,7 @@ pub async fn list_lectures(session: &CampusSession) -> Result<Vec<Value>, String
         .send()
         .await
         .map_err(|error| format!("获取讲座列表失败：{error}"))?;
+    auth::reject_vpn_redirect(&response, "加载讲座列表")?;
     let final_url = response.url().to_string();
     let body = response
         .text()
@@ -45,7 +46,7 @@ pub async fn list_lectures(session: &CampusSession) -> Result<Vec<Value>, String
         .map_err(|error| format!("读取讲座列表失败：{error}"))?;
     let data = parse_json(&body).ok_or_else(|| {
         if final_url.contains("vpn.seu.edu.cn") {
-            "当前不在校园网，请连接 EasyConnect VPN 后重试".to_string()
+            "学校服务请求被重定向到 VPN 门户".to_string()
         } else if final_url.to_ascii_lowercase().contains("login")
             || final_url.to_ascii_lowercase().contains("portal")
         {
@@ -81,6 +82,7 @@ pub async fn list_my_bookings(session: &CampusSession) -> Result<Vec<Value>, Str
         .send()
         .await
         .map_err(|error| format!("获取已预约列表失败：{error}"))?;
+    auth::reject_vpn_redirect(&response, "加载已预约列表")?;
     let final_url = response.url().to_string();
     let body = response
         .text()
@@ -88,7 +90,7 @@ pub async fn list_my_bookings(session: &CampusSession) -> Result<Vec<Value>, Str
         .map_err(|error| format!("读取已预约列表失败：{error}"))?;
     let data = parse_json(&body).ok_or_else(|| {
         if final_url.contains("vpn.seu.edu.cn") {
-            "当前不在校园网，请连接 EasyConnect VPN 后重试".to_string()
+            "学校服务请求被重定向到 VPN 门户".to_string()
         } else {
             "已预约列表响应无法识别，请刷新或重新登录".to_string()
         }
@@ -106,6 +108,7 @@ pub async fn fetch_captcha(session: &CampusSession) -> Result<Vec<u8>, String> {
         .send()
         .await
         .map_err(|error| format!("获取预约验证码失败：{error}"))?;
+    auth::reject_vpn_redirect(&response, "获取预约验证码")?;
     let final_url = response.url().to_string();
     let body = response
         .text()
@@ -113,7 +116,7 @@ pub async fn fetch_captcha(session: &CampusSession) -> Result<Vec<u8>, String> {
         .map_err(|error| format!("读取预约验证码失败：{error}"))?;
     let data = parse_json(&body).ok_or_else(|| {
         if final_url.contains("vpn.seu.edu.cn") {
-            "当前不在校园网，请连接 EasyConnect VPN 后重试".to_string()
+            "学校服务请求被重定向到 VPN 门户".to_string()
         } else if final_url.to_ascii_lowercase().contains("login")
             || final_url.to_ascii_lowercase().contains("portal")
         {
@@ -156,6 +159,7 @@ pub async fn submit_reservation(
         .send()
         .await
         .map_err(|error| format!("提交预约请求失败：{error}"))?;
+    auth::reject_vpn_redirect(&response, "提交预约请求")?;
     let body = response
         .text()
         .await
@@ -188,6 +192,7 @@ pub async fn is_booking_confirmed(
             .send()
             .await
             .map_err(|error| format!("核验预约状态失败：{error}"))?;
+        auth::reject_vpn_redirect(&response, "核验预约结果")?;
         let final_url = response.url().to_string();
         let body = response
             .text()
@@ -195,7 +200,7 @@ pub async fn is_booking_confirmed(
             .map_err(|error| format!("读取预约核验结果失败：{error}"))?;
         let data = parse_json(&body).ok_or_else(|| {
             if final_url.contains("vpn.seu.edu.cn") {
-                "当前不在校园网，请连接 EasyConnect VPN 后重试".to_string()
+                "学校服务请求被重定向到 VPN 门户".to_string()
             } else if final_url.to_ascii_lowercase().contains("login")
                 || final_url.to_ascii_lowercase().contains("portal")
             {

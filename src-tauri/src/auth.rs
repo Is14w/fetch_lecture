@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use rand::rngs::OsRng;
-use reqwest::Client;
+use reqwest::{Client, Response};
 use rsa::{pkcs8::DecodePublicKey, Pkcs1v15Encrypt, RsaPublicKey};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -28,13 +28,56 @@ pub enum LoginAttempt {
     NeedsPhoneCode(PendingLogin),
 }
 
+fn is_seu_vpn_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    host == "vpn.seu.edu.cn" || host.ends_with(".vpn.seu.edu.cn")
+}
+
+pub fn reject_vpn_redirect(response: &Response, operation: &str) -> Result<(), String> {
+    if !response.status().is_redirection() {
+        return Ok(());
+    }
+    let Some(location) = response
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Ok(());
+    };
+    let Ok(target) = response.url().join(location) else {
+        return Ok(());
+    };
+    let Some(host) = target.host_str() else {
+        return Ok(());
+    };
+    let host = host.to_ascii_lowercase();
+    if is_seu_vpn_host(&host) {
+        Err(format!(
+            "{operation}被学校服务重定向到 VPN 门户（{host}）；应用不会自动连接 VPN。请检查校园网认证或登录会话。"
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 pub fn new_client() -> Result<Client, String> {
     Client::builder()
         .cookie_store(true)
         .timeout(Duration::from_secs(30))
         .no_proxy()
         .user_agent(USER_AGENT)
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let host = attempt
+                .url()
+                .host_str()
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if is_seu_vpn_host(&host) {
+                attempt.stop()
+            } else {
+                attempt.follow()
+            }
+        }))
         .build()
         .map_err(|error| format!("创建学校认证会话失败：{error}"))
 }
@@ -122,11 +165,22 @@ async fn connect_ehall(client: Client, result: &Value) -> Result<CampusSession, 
     let redirect_url = urlencoding::decode(&raw)
         .map_err(|error| format!("解析讲座系统跳转地址失败：{error}"))?
         .into_owned();
+    let redirect_target = reqwest::Url::parse(&redirect_url)
+        .map_err(|error| format!("解析讲座系统跳转地址失败：{error}"))?;
+    if redirect_target
+        .host_str()
+        .map(is_seu_vpn_host)
+        .unwrap_or(false)
+    {
+        return Err("统一身份认证返回了 VPN 门户地址；应用不会自动连接 VPN。".to_string());
+    }
     let response = client
-        .get(&redirect_url)
+        .get(redirect_target)
         .send()
         .await
-        .map_err(|error| format!("连接讲座系统失败：{error}"))?
+        .map_err(|error| format!("连接讲座系统失败：{error}"))?;
+    reject_vpn_redirect(&response, "连接讲座系统")?;
+    let response = response
         .error_for_status()
         .map_err(|error| format!("连接讲座系统失败：{error}"))?;
     Ok(CampusSession {
